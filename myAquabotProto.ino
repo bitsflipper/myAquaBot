@@ -1,4 +1,4 @@
-// AquaponicsBot Control System
+// AquaonicBot Control System
 //
 // by: Myron Richard Dennison
 //
@@ -23,10 +23,10 @@
 //    13                     - Pushbutton switch
 //    Analog
 //    0                      - Output LED
-//    1                      - 
+//    1                      - DO sensor data pin
 //    2                      - Flow Rate data pin
 //    3                      - pH level sensor data pin
-//    4                      - LDR
+//    4                      
 //    5                      - DHT data pin
 //
 
@@ -54,9 +54,9 @@ const int DO = 6;
 //---------------------------------------->
 // I/O Pin Assignments
 //---------------------------------------->
+const int dO2SensorPin = A1;        // connect DO sensor to analog pin A1
 const int inputSwitchPin = 13;      // connect switch to digital pin 13 
 const int outputLedPin = A0;        // connect LED to digital pin A0
-const int ldrPin = A4;              // connect LDR  to analog pin A4
 const int ledPinR = 4;              // connect tri-color Red pin to digital pin 4
 const int ledPinG = 5;              // connect tri-color Green pin to digital pin 5
 const int ledPinB = 6;              // connect tri-color Blue pin to digital pin 6
@@ -80,8 +80,8 @@ OneWire ds(DS18S20_Pin);
 // External Interrupts: 3 (interrupt 0), 2 (interrupt 1), 0 (interrupt 2), 1 (interrupt 3) and 7 (interrupt 4). 
 // These pins can be configured to trigger an interrupt on a low value, a rising or falling edge, or a change in value.
 //
-int idDHT11pin = 3;                 // HW interrupt pin for the DHT sensor
-int idDHT11intNumber = 0;           // External HW interrupt number for pin 3
+const int idDHT11pin = 3;           // HW interrupt pin for the DHT sensor
+const int idDHT11intNumber = 0;     // External HW interrupt number for pin 3
 //
 // ISR callback wrapper
 void dht11_wrapper();               // must be declared before the instantiating the DHT object
@@ -97,7 +97,7 @@ long wtcReadingPreviousMillis = 0;  // last wtc update
 long updateGAEpreviousMillis = 0;   // last GAE update
 long dhtSensorPreviousMillis = 0;   // last DHT sensor update
 long flowRatePreviousMillis = 0;    // last flow rate update
-long doPreviousMillis = 0;    // last do update
+long dO2PreviousMillis = 0;         // last moisture update
 long waterPhPreviousMillis = 0;     // last pH level update
 long lcdHeaderPreviousMillis = 0;   // last lcd header update
 long lcdErrorPreviousMillis = 0;    // last lcd header update
@@ -112,33 +112,29 @@ float b;
 int buf[10],temp;
 float ph;                           // water pH level
 
-// light sensor variables
-bool alert = false;                 // initialize alert to false
-int digitalLdrVal;                  // mapped raw LDR values
-
 // rh sensor variables
 float rh;                           // relative humidity
 
-// temperature sensors variables
+// ambient temperature sensors variables
 float atc;                          // temperature as Celsius
 
-//float atf;                        // temperature as Fahrenheit
+// water temperature sensor variables
 float wtc;                          // water temperature as Celsius
+
+// DO sensor variables
+float dO2;                          // dissolved oxygen
 
 // flow rate sensor variables
 float fr;                           // water flow rate
 
-// dissolved oxygen sensor variables
-float d_oxygen;
-
 // push button switch variables
-volatile int currentSwitchState = LOW;
-volatile int previousSwitchState = LOW;
-volatile int outputLedPinState = LOW;
+int currentSwitchState = LOW;
+int previousSwitchState = LOW;
+int outputLedPinState = LOW;
 
 // other global variables
-String connection = ""; 
 String error;                       // holds the ERROR message
+bool alert = false;                 // initialize alert to false
 int hours, minutes, seconds;        // hold the current time
 bool initialCheck = true;           // first check
 bool adlawan = true;                // between sunrise and sunset
@@ -187,28 +183,26 @@ void useInterrupt(boolean v) {
   }
 }
 
-
 void setup()
 {
-  Serial.begin(9600);
-  
-  Serial.println("Starting bridge...\n");
-  digitalWrite(13, LOW);   
+  //Serial.begin(9600);  
+  //Serial.println("Starting bridge...\n");
+  digitalWrite(13, LOW);  
   Bridge.begin();                     // make contact with the linux processor
   digitalWrite(13, HIGH);             // Led on pin 13 turns on when the bridge is ready
   delay(2000);                 	      // wait 2 seconds  
-
+  
   FileSystem.begin();                 // initializes SD card
   setupLog();                 	      // setup system log
-  
+
   // Configures the specified pins to behave either as an input or an output.
   pinMode(ledPinR, OUTPUT);
   pinMode(ledPinG, OUTPUT);
   pinMode(ledPinB, OUTPUT); 
   pinMode(outputLedPin, OUTPUT); 
-  pinMode(inputSwitchPin, INPUT); 
+  pinMode(inputSwitchPin, INPUT);     
+  pinMode(dO2SensorPin, INPUT);  
   pinMode(DS18S20_Pin, INPUT);
-  pinMode(ldrPin, INPUT);
   pinMode(FLOWSENSORPIN, INPUT);
   
   digitalWrite(FLOWSENSORPIN, HIGH);
@@ -224,16 +218,7 @@ void setup()
   lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
   lcd.print("    STUDIO      ");
   
-  delay(5000);
-  
-  // Setup LCD's initial display
-  lcd.begin(16, 2);		      // set up lCD's number of columns and rows
-  lcd.clear();			      // clears the LCD screen and position the cursor on the upper-left corner of the screen
-  lcd.print("AQUAPONICS DAQ &");  
-  lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
-  lcd.print(" CONTROL SYSTEM ");
-  
-  delay(5000);
+  delay(3000);  
 }
 
 // This wrapper is in charge of calling 
@@ -244,12 +229,12 @@ void dht11_wrapper() {
 
 void loop()
 {   
-  char atemp_str[10];
-  char wtemp_str[10];
-  char rh_str[10];
-  char fr_str[10];
-  char do_str[10];
-  char ph_str[10];
+  char atemp_str[5];
+  char wtemp_str[5];
+  char rh_str[5];
+  char fr_str[5];
+  char dO2_str[5];
+  char ph_str[5];
 
   unsigned long currentMillis = millis();  // current time
   switchStateChange();
@@ -269,13 +254,13 @@ void loop()
   
   if(currentMillis - flowRatePreviousMillis > 6000){
     //fr = flowrate;
-    fr = 3.0;
+    fr = 105.0;
     flowRatePreviousMillis = currentMillis;
   }
   
-  if(currentMillis - doPreviousMillis > 8000){
-    d_oxygen = 6.0;
-    doPreviousMillis = currentMillis;
+  if(currentMillis - dO2PreviousMillis > 8000){
+    dO2 = 6.0;
+    dO2PreviousMillis = currentMillis;
   }
   
   if(currentMillis - waterPhPreviousMillis > 10000){
@@ -286,46 +271,62 @@ void loop()
   // display sensor readings on the LCD
   lcdDisplay();    
   
-  digitalWrite(ledPinG, LOW);    
+  //digitalWrite(ledPinG, LOW);    
   if(currentMillis - updateGAEpreviousMillis > 60000){
     growLight();     
     //digitalWrite(ledPinG, HIGH);
     //connection = getGoogleAppEngineResponse("http://bitsflipperstudio.appspot.com/adacs/testConnection");
-    connection = updateGAEServer("http://myaquabot.appspot.com/handlers/testConnection");
+    String connection = updateGAEServer("http://myaquabot.appspot.com/handlers/testConnection");
     if (connection == "Ok"){ 
-      digitalWrite(ledPinR, LOW);
       digitalWrite(ledPinG, HIGH);
       String atc_s = dtostrf((int)atc, 3, 1, atemp_str);
       String wtc_s = dtostrf((int)wtc, 3, 1, wtemp_str);
       String rh_s = dtostrf((int)rh, 3, 1, rh_str);
-      String do_s = dtostrf((int)d_oxygen, 3, 1, do_str);
+      String dO2_s = dtostrf((int)dO2, 3, 1, dO2_str);
       String fr_s = dtostrf((int)fr, 3, 1, fr_str);
       String ph_s = dtostrf((int)ph, 3, 1, ph_str); 
-      //String postData = updateGAEServer("http://remoteaquaponicsdaqsystem.appspot.com/handlers/dht?ATemp=" + ambientTemp + "&WTemp=28"+ "&RH=" + rh + "&FR=120");
-      //String postData = updateGAEServer("http://bitsflipperstudio.appspot.com/handlers/sensors?ATemp=" + ambientTemp + "&RH=" + rh);
-      String postData = updateGAEServer("http://myaquabot.appspot.com/handlers/sensors?ATemp=" + atc_s + "&WTemp=" + wtc_s +  "&RH=" + rh_s + "&FR=3.0" + fr_s + "&PH=" + ph_s + "&DO=6.0");
-      if (postData == "Ok"){
-        digitalWrite(ledPinG, LOW);
-        digitalWrite(ledPinR, LOW);
+      
+      //String postData = updateGAEServer("http://myaquabot.appspot.com/handlers/sensors?ATemp=" + atc_s + "&WTemp=" + wtc_s + "&RH=" + rh_s + "&FR=" + fr_s + "&PH=" + ph_s + "&DO=6.5");
+      //String postData = updateGAEServer("http://myaquabot.appspot.com/handlers/sensors?ATemp=30&WTemp=28&RH=66&FR=3.0&PH=6.8&DO=6.0");
+      
+      String response;
+      // Launch "curl" command to send HTTP request to GAE server
+      // curl is command line program for transferring data using different internet protocols
+      Process sendRequest;		        // Create a process 
+      sendRequest.begin("curl");	        // start with "curl" command
+      sendRequest.addParameter("http://myaquabot.appspot.com/handlers/sensors?ATemp=" + atc_s + "&WTemp=" + wtc_s + "&RH=" + rh_s + "&FR=" + fr_s + "&PH=" + ph_s + "&DO=" + dO2_s);
+      sendRequest.run();		        // Run the process and wait for its termination
+    
+      // Captures the HTTP response
+      while (sendRequest.available() > 0) {
+        char x = sendRequest.read();
+        response += x;
+        //Serial.print(x); 
       }
+      // Ensure the last bit of data is sent.
+      Serial.flush();   
+      
+      if (response == "Ok"){
+        digitalWrite(ledPinG, LOW);  
+      }  
       else{
-        digitalWrite(ledPinR, HIGH);
         // Setup LCD's initial display
         lcd.begin(16, 2);		      // set up lCD's number of columns and rows
         lcd.clear();			      // clears the LCD screen and position the cursor on the upper-left corner of the screen
         lcd.print("ERROR: FAILED TO");  
         lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
         lcd.print("UPDATE GAESERVER");
-      }            
+        delay(3000);
+      }
     } 
     else{
-      digitalWrite(ledPinR, HIGH);
       // Setup LCD's initial display
       lcd.begin(16, 2);		      // set up lCD's number of columns and rows
       lcd.clear();			      // clears the LCD screen and position the cursor on the upper-left corner of the screen
       lcd.print("ERROR: FAILED TO");  
       lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
-      lcd.print("CONNECT TO GAE S");                 
+      lcd.print("CONNECT 2 SERVER");
+      delay(3000);           
     }
     updateGAEpreviousMillis = currentMillis;
   }     
@@ -394,28 +395,13 @@ void lcdDisplay(){
   unsigned long currentMillis = millis();  // current time
   if(currentMillis - lcdHeaderPreviousMillis > 60000) {
     // Setup LCD's initial display
-    lcd.begin(16, 2);		      // set up lCD's number of columns and rows
-    lcd.clear();			      // clears the LCD screen and position the cursor on the upper-left corner of the screen
-    lcd.print("  BITSFLIPPER   ");  
-    lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
-    lcd.print("    STUDIO      ");
-  
-    delay(5000);
-    
-    // Setup LCD's initial display
     lcd.begin(16, 2);		              // set up lCD's number of columns and rows
     lcd.clear();			      // clears the LCD screen and position the cursor on the upper-left corner of the screen
     lcd.print("AQUAPONICS DAQ &");  
     lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
     lcd.print(" CONTROL SYSTEM ");
     
-    delay(5000);
-    
-    /*lcd.begin(16, 2);		              // set up lCD's number of columns and rows
-    lcd.clear();			      // clears the LCD screen and position the cursor on the upper-left corner of the screen
-    lcd.print("AT:   WT:   R:  ");  
-    lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
-    lcd.print("FR:   PH:   M:  "); */
+    delay(3000);
     
     // save the last time temp was updated 
     lcdHeaderPreviousMillis = currentMillis;  
@@ -488,7 +474,7 @@ void lcdDisplay(){
           lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
           lcd.print("Reading: ");
           lcd.print((int)fr);
-          lcd.print("L/min");
+          lcd.print("L/hr");
           sensor = PH;
           break; 
         case PH: 
@@ -503,31 +489,15 @@ void lcdDisplay(){
         case DO: 
           lcd.begin(16, 2);                   // set up lCD's number of columns and rows
           lcd.clear();			      // clears the LCD screen and position the cursor on the upper-left corner of the screen
-          lcd.print("DISSOLVED OXYGEN");  
+          lcd.print(">>DISSOLVED O2<<");  
           lcd.setCursor(0, 1);		      // set the location at which the subsequent text written to the LCD will be displayed
           lcd.print("Reading: ");
-          lcd.print((int)d_oxygen);
+          lcd.print((int)dO2);
           lcd.print("mg/L");
           sensor = AMBIENT;
           break;   
       }
-      /*
-      // set the location at which the subsequent text written to the LCD will be displayed
-      lcd.setCursor(3, 0);
-      lcd.print((int)atc);
-      //lcd.print((char)223);
-      lcd.setCursor(9, 0);
-      lcd.print((int)wtc);
-      lcd.setCursor(14, 0);
-      lcd.print((int)rh);
-      lcd.setCursor(3, 1);
-      lcd.print((int)fr);	
-      lcd.setCursor(9, 1);
-      lcd.print((int)ph);
-      lcd.setCursor(14, 1);
-      lcd.print((int)moisture);  */
     }
-    
     // save the last time temp was updated 
     lcdReadingPreviousMillis = currentMillis;
   }   
@@ -544,41 +514,41 @@ void DHT11Sensor(){
   switch (result)
   {
     case IDDHTLIB_OK: 
-      Serial.println("OK");       
+      //Serial.println("OK");       
       alert = false;
       break;
     case IDDHTLIB_ERROR_CHECKSUM: 
-      Serial.println("Error\n\r\tChecksum error"); 
+      //Serial.println("Error\n\r\tChecksum error"); 
       error = "CHECKSUM ERROR";
       alert = true;
       break;
     case IDDHTLIB_ERROR_ISR_TIMEOUT: 
-      Serial.println("Error\n\r\tISR Time out error"); 
+      //Serial.println("Error\n\r\tISR Time out error"); 
       error = "ISR TIMEOUT";
       alert = true;
       break;
     case IDDHTLIB_ERROR_RESPONSE_TIMEOUT: 
-      Serial.println("Error\n\r\tResponse time out error"); 
+      //Serial.println("Error\n\r\tResponse time out error"); 
       error = "RESPONSE TIMEOUT";
       alert = true;
       break;
     case IDDHTLIB_ERROR_DATA_TIMEOUT: 
-      Serial.println("Error\n\r\tData time out error"); 
+      //Serial.println("Error\n\r\tData time out error"); 
       error = "DATA TIMEOUT";
       alert = true;
       break;
     case IDDHTLIB_ERROR_ACQUIRING: 
-      Serial.println("Error\n\r\tAcquiring"); 
+      //Serial.println("Error\n\r\tAcquiring"); 
       error = "ACQUIRING";
       alert = true;
       break;
     case IDDHTLIB_ERROR_DELTA: 
-      Serial.println("Error\n\r\tDelta time to small"); 
+      //Serial.println("Error\n\r\tDelta time to small"); 
       error = "DELTA TIME TOO SMALL";
       alert = true;
       break;
     case IDDHTLIB_ERROR_NOTSTARTED: 
-      Serial.println("Error\n\r\tNot started"); 
+      //Serial.println("Error\n\r\tNot started"); 
       error = "NOT STARTED";
       alert = true;
       break;
@@ -588,23 +558,11 @@ void DHT11Sensor(){
       alert = true;
       break;
   }
-  Serial.print("Humidity (%): ");
-  Serial.println(DHT11.getHumidity(), 2);
+  //Serial.print("Humidity (%): ");
+  //Serial.println(DHT11.getHumidity(), 2);
 
-  Serial.print("Temperature (°C): ");
-  Serial.println(DHT11.getCelsius(), 2);
-
-  //Serial.print("Temperature (oF): ");
-  //Serial.println(DHT11.getFahrenheit(), 2);
-
-  //Serial.print("Temperature (K): ");
-  //Serial.println(DHT11.getKelvin(), 2);
-
-  //Serial.print("Dew Point (oC): ");
-  //Serial.println(DHT11.getDewPoint());
-
-  //Serial.print("Dew Point Slow (oC): ");
-  //Serial.println(DHT11.getDewPointSlow());  
+  //Serial.print("Temperature (°C): ");
+  //Serial.println(DHT11.getCelsius(), 2);
   
   atc = DHT11.getCelsius();        
   rh = DHT11.getHumidity();
@@ -625,7 +583,7 @@ String updateGAEServer(String request){
   while (sendRequest.available() > 0) {
     char x = sendRequest.read();
     response += x;
-    Serial.print(x); 
+    //Serial.print(x); 
   }
   // Ensure the last bit of data is sent.
   Serial.flush();   
@@ -706,7 +664,6 @@ void getHourMinSec() {
     adlawan = false;
 }
 
-
 // Log System Status
 void log(String status){
   if(FileSystem.exists("/mnt/sda1/log.txt")){      
@@ -745,12 +702,12 @@ float getWTemp(){
  }
 
  if ( OneWire::crc8( addr, 7) != addr[7]) {
-   Serial.println("CRC is not valid!");
+   //Serial.println("CRC is not valid!");
    //return -1000;
  }
 
  if ( addr[0] != 0x10 && addr[0] != 0x28) {
-   Serial.print("Device is not recognized");
+   //Serial.print("Device is not recognized");
    //return -1000;
  }
 
@@ -795,9 +752,7 @@ void getFlowRate(){
   float liters = pulses;
   liters /= 8.1;
   liters -= 6;
-  liters /= 60.0;
-
-  Serial.print(liters); Serial.println(" Liters");    
+  liters /= 60.0; 
 }
 
 // Get walter pH level
@@ -822,8 +777,5 @@ void getWaterPHLevel(){
     avgValue+=buf[i];
   float phValue=(float)avgValue*5.0/1024/6; //convert the analog into millivolt
   phValue=3.5*phValue;                      //convert the millivolt into pH value
-  ph = phValue;
-  Serial.print("    pH:");  
-  Serial.print(phValue,2);
-  Serial.println(" ");  
+  ph = phValue;  
 }
